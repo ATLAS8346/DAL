@@ -30,61 +30,62 @@ def return_dataset(data, scale=False, usps=False, all_use='no'):
 
 
 def dataset_read(source, target, batch_size, scale=False, all_use='no'):
-    S = {}
-    S_test = {}
-    T = {}
-    T_test = {}
-    usps = False
-    if source == 'usps' or target == 'usps':
-        usps = True
 
+    train_src, test_src = {}, {}
+    train_trg, test_trg = {}, {}
+
+    usps = True if source == 'usps' or target == 'usps' else False
     # domain_all = ['mnistm', 'mnist', 'usps', 'svhn', 'syn']
     domain_all = ['mnistm', 'mnist', 'usps', 'svhn']
     domain_all.remove(source)
-    (train_source, s_label_train,
-     test_source, s_label_test) = return_dataset(
+    (train_src_img, train_src_label,
+     test_src_img, test_src_label) = return_dataset(
          source, scale=scale, usps=usps, all_use=all_use)
 
-    (train_target, t_label_train,
-     test_target, t_label_test) = return_dataset(
-         domain_all[0], scale=scale, usps=usps, all_use=all_use)
-
-    for i in range(1, len(domain_all)):
-        (train_target_, t_label_train_,
-         test_target_, t_label_test_) = return_dataset(
+    train_trg_img, train_trg_label = [], []
+    test_trg_img, test_trg_label = [], []
+    for i in range(len(domain_all)):
+        (_train_img, _train_label, _test_img, _test_label) = return_dataset(
             domain_all[i], scale=scale, usps=usps, all_use=all_use)
+        train_trg_img.append(_train_img)
+        train_trg_label.append(_train_label)
+        test_trg_img.append(_test_img)
+        test_trg_label.append(_test_label)
 
-        train_target = np.concatenate((train_target, train_target_), axis=0)
-        t_label_train = np.concatenate((t_label_train, t_label_train_), axis=0)
-        test_target = np.concatenate((test_target, test_target_), axis=0)
-        t_label_test = np.concatenate((t_label_test, t_label_test_), axis=0)
+    train_trg_img = np.concatenate(train_trg_img, axis=0)
+    train_trg_label = np.concatenate(train_trg_label, axis=0)
+    test_trg_img = np.concatenate(test_trg_img, axis=0)
+    test_trg_label = np.concatenate(test_trg_label, axis=0)
 
     # print(domain)
-    print('Source Training: ', train_source.shape)
-    print('Source Training label: ', s_label_train.shape)
-    print('Source Test: ', test_source.shape)
-    print('Source Test label: ', s_label_test.shape)
+    print('Source Training: ', train_src_img.shape)
+    print('Source Training label: ', train_src_label.shape)
+    print('Source Test: ', test_src_img.shape)
+    print('Source Test label: ', test_src_label.shape)
 
-    print('Target Training: ', train_target.shape)
-    print('Target Training label: ', t_label_train.shape)
-    print('Target Test: ', test_target.shape)
-    print('Target Test label: ', t_label_test.shape)
+    print('Target Training: ', train_trg_img.shape)
+    print('Target Training label: ', train_trg_label.shape)
+    print('Target Test: ', test_trg_img.shape)
+    print('Target Test label: ', test_trg_label.shape)
 
-    S['imgs'] = train_source
-    S['labels'] = s_label_train
-    T['imgs'] = train_target
-    T['labels'] = t_label_train
+    train_src['imgs'] = train_src_img
+    train_src['labels'] = train_src_label
+    train_trg['imgs'] = train_trg_img
+    train_trg['labels'] = train_trg_label
 
     # input target samples for both
-    S_test['imgs'] = test_target
-    S_test['labels'] = t_label_test
-    T_test['imgs'] = test_target
-    T_test['labels'] = t_label_test
+    test_src['imgs'] = test_src_img
+    test_src['labels'] = test_src_label
+    test_trg['imgs'] = test_trg_img
+    test_trg['labels'] = test_trg_label
     scale = 32 if source == 'synth' else 32 if source == 'usps' or target == 'usps' else 32
+
     train_loader = UnalignedDataLoader()
-    train_loader.initialize(S, T, batch_size, batch_size, scale=scale)
-    dataset = train_loader.load_data()
+    train_loader.initialize(train_src, train_trg, batch_size, batch_size, scale=scale)
+    dataset_train = train_loader.load_data()
+
     test_loader = UnalignedDataLoader()
-    test_loader.initialize(S_test, T_test, batch_size, batch_size, scale=scale)
+    test_loader.initialize(test_src, test_trg, batch_size, batch_size, scale=scale)
     dataset_test = test_loader.load_data()
-    return dataset, dataset_test
+
+    return dataset_train, dataset_test

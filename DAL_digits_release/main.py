@@ -99,16 +99,12 @@ def main():
     if args.eval_only:
         solver.test(0)
     else:
-        count = 0
+        global_step = 0
         for epoch in range(args.max_epoch):
-            if not args.one_step:
-                num = solver.train_epoch(epoch, record_file=record_train)
-            else:
-                num = solver.train_onestep(epoch, record_file=record_train)
-            count += num
+            global_step = solver.train_epoch(epoch, global_step, record_file=record_train)
             if epoch % 1 == 0:
                 solver.test(epoch, record_file=record_test, save_model=args.save_model)
-            if count >= 20000:
+            if global_step >= 20000:
                 break
 
 

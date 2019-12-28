@@ -56,7 +56,8 @@ class Solver():
 
         print('dataset loading')
         self.datasets, self.dataset_test = dataset_read(
-            source, target, self.batch_size, scale=self.scale, all_use=self.all_use)
+            source, target, self.batch_size,
+            scale=self.scale, all_use=self.all_use)
         print('load finished!')
 
         self.G = Generator(source=source, target=target)
@@ -170,26 +171,32 @@ class Solver():
         return ring_loss
 
     def mutual_information_minimizer(self, img_src, img_trg):
-        # minimize mutual information between (ds, ci) and (di, ci)
+        # minimize mutual information between (d0, d2) and (d1, d2)
+        # minimize mutual information between (ds, di) and (ci, di)
+
         for i in range(0, self.mi_k):
             ds_src, ds_trg = self.D['ds'](self.G(img_src)), self.D['ds'](self.G(img_trg))
             di_src, di_trg = self.D['di'](self.G(img_src)), self.D['di'](self.G(img_trg))
             ci_src, ci_trg = self.D['ci'](self.G(img_src)), self.D['ci'](self.G(img_trg))
 
-            ci_src_shuffle = torch.index_select(
-                ci_src, 0, torch.randperm(ci_src.shape[0]).to(self.device))
-            ci_trg_shuffle = torch.index_select(
-                ci_trg, 0, torch.randperm(ci_trg.shape[0]).to(self.device))
+            di_src_shuffle = torch.index_select(
+                di_src, 0, torch.randperm(di_src.shape[0]).to(self.device))
+            di_trg_shuffle = torch.index_select(
+                di_trg, 0, torch.randperm(di_trg.shape[0]).to(self.device))
 
-            MI_ds_ci_src = self.mi_estimator(ds_src, ci_src, ci_src_shuffle)
-            MI_ds_ci_trg = self.mi_estimator(ds_trg, ci_trg, ci_trg_shuffle)
-            MI_di_ci_src = self.mi_estimator(di_src, ci_src, ci_src_shuffle)
-            MI_di_ci_trg = self.mi_estimator(di_trg, ci_trg, ci_trg_shuffle)
+            MI_ds_di_src = self.mi_estimator(ds_src, di_src, di_src_shuffle)
+            MI_ds_di_trg = self.mi_estimator(ds_trg, di_trg, di_trg_shuffle)
+            MI_ds_di = MI_ds_di_src + MI_ds_di_trg
 
-            MI = 0.25 * (MI_ds_ci_src + MI_ds_ci_trg + MI_di_ci_src + MI_di_ci_trg) * self.mi_coeff
+            MI_ci_di_src = self.mi_estimator(ci_src, di_src, di_src_shuffle)
+            MI_ci_di_trg = self.mi_estimator(ci_trg, di_trg, di_trg_shuffle)
+            MI_ci_di = MI_ci_di_src + MI_ci_di_trg
+
+            MI = 0.25 * (MI_ds_di_src + MI_ds_di_trg + MI_ci_di_src + MI_ci_di_trg) * self.mi_coeff
             MI.backward()
             self.group_opt_step(['D_ds', 'D_di', 'D_ci', 'MI'])
         # pred_di_ci_src = self.M(out_di_src, out_ci_src)
+        return MI_ds_di, MI_ci_di
 
     def class_confusion(self, img_src, img_trg):
         # - adversarial training
@@ -248,7 +255,7 @@ class Solver():
 
         recon_loss = None
         rec_loss_src, rec_loss_trg = dict(), dict()
-        for k1, k2 in [('ds', 'ci'), ('di', 'ci')]:
+        for k1, k2 in [('di', 'ci'), ('di', 'ds')]:
             k = '%s_%s' % (k1, k2)
             rec_src[k] = self.R(torch.cat([feat_src[k1], feat_src[k2]], 1))
             rec_trg[k] = self.R(torch.cat([feat_trg[k1], feat_trg[k2]], 1))
@@ -265,7 +272,7 @@ class Solver():
         self.group_opt_step(['D_di', 'D_ci', 'D_ds', 'R'])
         return rec_loss_src, rec_loss_trg
 
-    def train_epoch(self, epoch, record_file=None):
+    def train_epoch(self, epoch, global_step, record_file=None):
         # set training
         for k in self.modules.keys():
             self.modules[k].train()
@@ -281,7 +288,7 @@ class Solver():
                   desc=pbar_descr_prefix) as pbar:
             for batch_idx, data in enumerate(self.datasets):
                 if batch_idx > total_batches:
-                    return batch_idx
+                    return global_step
 
                 img_trg = data['T'].to(self.device)
                 img_src = data['S'].to(self.device)
@@ -293,8 +300,9 @@ class Solver():
                 self.reset_grad()
                 # ================================== #
                 class_loss = self.optimize_classifier(img_src, label_src)
+                dis_loss = self.discrepancy_minimizer(img_src, img_trg, label_src)
                 ring_loss = self.ring_loss_minimizer(img_src, img_trg)
-                self.mutual_information_minimizer(img_src, img_trg)
+                MI_ds_ci, MI_di_ci = self.mutual_information_minimizer(img_src, img_trg)
                 confusion_loss = self.class_confusion(img_src, img_trg)
                 (alignment_loss1, alignment_loss2, discrepancy_loss) = self.adversarial_alignment(
                     img_src, img_trg)
@@ -306,42 +314,55 @@ class Solver():
                     for key, val in class_loss.items():
                         self.logger.add_scalar(
                             "class_loss/%s" % key, val,
-                            global_step=batch_idx)
+                            global_step=global_step)
+
+                    for key, val in dis_loss.items():
+                        self.logger.add_scalar(
+                            "dis_loss/%s" % key, val,
+                            global_step=global_step)
 
                     for key, val in confusion_loss.items():
                         self.logger.add_scalar(
                             "confusion_loss/%s" % key, val,
-                            global_step=batch_idx)
+                            global_step=global_step)
 
                     for key, val in rec_loss_src.items():
                         self.logger.add_scalar(
                             "rec_loss_src/%s" % key, val,
-                            global_step=batch_idx)
+                            global_step=global_step)
 
                     for key, val in rec_loss_trg.items():
                         self.logger.add_scalar(
                             "rec_loss_trg/%s" % key, val,
-                            global_step=batch_idx)
+                            global_step=global_step)
 
                     self.logger.add_scalar(
                         "extra_loss/alignment_loss1", alignment_loss1,
-                        global_step=batch_idx)
+                        global_step=global_step)
 
                     self.logger.add_scalar(
                         "extra_loss/alignment_loss2", alignment_loss2,
-                        global_step=batch_idx)
+                        global_step=global_step)
 
                     self.logger.add_scalar(
                         "extra_loss/discrepancy_ds_di_trg", discrepancy_loss,
-                        global_step=batch_idx)
+                        global_step=global_step)
 
                     self.logger.add_scalar(
                         "extra_loss/ring", ring_loss,
-                        global_step=batch_idx)
+                        global_step=global_step)
+
+                    self.logger.add_scalar(
+                        "MI/ds_ci", MI_ds_ci,
+                        global_step=global_step)
+
+                    self.logger.add_scalar(
+                        "MI/di_ci", MI_di_ci,
+                        global_step=global_step)
                     # ================================== #
                 pbar.update()
-        return batch_idx
-
+                global_step += 1
+        return global_step
 
     def test(self, epoch, record_file=None, save_model=False):
         self.G.eval()
