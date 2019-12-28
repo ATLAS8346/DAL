@@ -302,7 +302,7 @@ class Solver():
                 class_loss = self.optimize_classifier(img_src, label_src)
                 dis_loss = self.discrepancy_minimizer(img_src, img_trg, label_src)
                 ring_loss = self.ring_loss_minimizer(img_src, img_trg)
-                MI_ds_ci, MI_di_ci = self.mutual_information_minimizer(img_src, img_trg)
+                MI_ds_di, MI_ci_di = self.mutual_information_minimizer(img_src, img_trg)
                 confusion_loss = self.class_confusion(img_src, img_trg)
                 (alignment_loss1, alignment_loss2, discrepancy_loss) = self.adversarial_alignment(
                     img_src, img_trg)
@@ -353,11 +353,11 @@ class Solver():
                         global_step=global_step)
 
                     self.logger.add_scalar(
-                        "MI/ds_ci", MI_ds_ci,
+                        "MI/ds_di", MI_ds_di,
                         global_step=global_step)
 
                     self.logger.add_scalar(
-                        "MI/di_ci", MI_di_ci,
+                        "MI/ci_di", MI_ci_di,
                         global_step=global_step)
                     # ================================== #
                 pbar.update()
