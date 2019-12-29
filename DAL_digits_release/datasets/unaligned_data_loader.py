@@ -4,7 +4,7 @@ import torchvision.transforms as transforms
 from datasets_ import Dataset
 
 
-class PairedData(object):
+class PairedData():
     def __init__(self, data_loader_A, data_loader_B, max_dataset_size):
         self.data_loader_A = data_loader_A
         self.data_loader_B = data_loader_B
@@ -50,29 +50,26 @@ class PairedData(object):
 
 
 class UnalignedDataLoader():
-    def initialize(self, source, target, batch_size1, batch_size2, scale=32):
+    def __init__(self, source, target, bs_source, bs_target, scale=32):
+
         transform = transforms.Compose([
             transforms.Resize(scale),
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
-        dataset_source = Dataset(source['imgs'], source['labels'], transform=transform)
-        dataset_target = Dataset(target['imgs'], target['labels'], transform=transform)
-        data_loader_s = torch.utils.data.DataLoader(
-            dataset_source,
-            batch_size=batch_size1,
-            shuffle=True,
-            num_workers=4)
 
-        data_loader_t = torch.utils.data.DataLoader(
-            dataset_target,
-            batch_size=batch_size2,
-            shuffle=True,
-            num_workers=4)
-        self.dataset_s = dataset_source
-        self.dataset_t = dataset_target
-        self.paired_data = PairedData(data_loader_s, data_loader_t,
-                                      float("inf"))
+        self.dataset_s = Dataset(source['imgs'], source['labels'], transform=transform)
+        self.dataset_t = Dataset(target['imgs'], target['labels'], transform=transform)
+
+        loader_s = torch.utils.data.DataLoader(
+            self.dataset_s, batch_size=bs_source,
+            shuffle=True, num_workers=4)
+
+        loader_t = torch.utils.data.DataLoader(
+            self.dataset_t, batch_size=bs_target,
+            shuffle=True, num_workers=4)
+
+        self.paired_data = PairedData(loader_s, loader_t, float("inf"))
 
     def name(self):
         return 'UnalignedDataLoader'

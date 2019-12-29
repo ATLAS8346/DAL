@@ -1,7 +1,7 @@
 import numpy as np
 import cPickle as pkl
 
-def load_syntraffic():
+def load_syntraffic(base_dir):
     data_source = pkl.load(open('../data/data_synthetic'))
     source_train = np.random.permutation(len(data_source['image']))
     data_s_im = data_source['image'][source_train[:len(data_source['image'])], :, :, :]

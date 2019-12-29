@@ -59,7 +59,7 @@ class Solver(nn.Module):
 
         print('Loading datasets')
         self.dataset_train, self.dataset_test = dataset_read(
-            source, target, self.batch_size,
+            args.data_dir, source, target, self.batch_size,
             scale=self.scale, all_use=self.all_use)
         print('Done!')
 
@@ -141,12 +141,16 @@ class Solver(nn.Module):
 
     def optimize_classifier(self, img_src, label_src):
         _loss = dict()
+        _acc = dict()
         feat_src = self.G(img_src)
         for key in ['ds', 'di', 'ci']:
             k = "class_src_%s" % key
-            _loss[k] = self.xent_loss(
-                self.C[key](self.D[key](feat_src)), label_src)
+            out = self.C[key](self.D[key](feat_src))
+            _loss[k] = self.xent_loss(out, label_src)
+            _acc[k] = (out.detach().max(1)[1] == label_src).float().sum() / out.size(0)
+
         self.log_scalar(_loss, prefix='class_loss')
+        self.log_scalar(_acc, prefix='train_acc')
 
         _sum_loss = sum([l for _, l in _loss.items()])
         _sum_loss.backward()
@@ -304,8 +308,7 @@ class Solver(nn.Module):
         self.group_opt_step(['D_di', 'D_ci', 'D_ds', 'R'])
         return rec_loss_src, rec_loss_trg
 
-    def train_epoch(self, epoch):
-        # set training
+    def set_train(self):
         for k in self.components.keys():
             self.components[k].train()
         for k in self.C.keys():
@@ -313,6 +316,17 @@ class Solver(nn.Module):
         for k in self.D.keys():
             self.D[k].train()
 
+    def set_eval(self):
+        for k in self.components.keys():
+            self.components[k].eval()
+        for k in self.C.keys():
+            self.C[k].eval()
+        for k in self.D.keys():
+            self.D[k].eval()
+
+    def train_epoch(self, epoch):
+        # set training
+        self.set_train()
         # torch.cuda.manual_seed(1)
         total_batches = 500000
         pbar_descr_prefix = "Epoch %d" % (epoch)
@@ -345,13 +359,8 @@ class Solver(nn.Module):
                 self.global_step += 1
         return self.global_step
 
-    def test(self, epoch, subset='test', save_model=False):
-        self.G.eval()
-        self.D['di'].eval()
-        self.D['ds'].eval()
-        self.C['di'].eval()
-        self.C['ds'].eval()
-
+    def test(self, subset='test', save_model=False):
+        self.set_eval()
         dataset = self.dataset_test if subset == 'test' else self.dataset_train
         with torch.no_grad():
             loss_src, loss_trg = dict(), dict()
@@ -366,7 +375,7 @@ class Solver(nn.Module):
                 img_src, label_src = img_src.to(self.device), label_src.to(self.device)
 
                 img_trg, label_trg = data['T'], data['T_label'].long()
-                img_trg, label_trg = img_src.to(self.device), label_src.to(self.device)
+                img_trg, label_trg = img_trg.to(self.device), label_trg.to(self.device)
 
                 out_src, out_trg = dict(), dict()
                 pred_src, pred_trg = dict(), dict()
@@ -383,8 +392,8 @@ class Solver(nn.Module):
                     loss_src[key] += F.cross_entropy(out_src[key], label_src, reduction='sum').item()
                     loss_trg[key] += F.cross_entropy(out_trg[key], label_trg, reduction='sum').item()
                     # correct predictions
-                    correct_src[key] += pred_src[key].eq(label_src.data).cpu().sum()
-                    correct_trg[key] += pred_trg[key].eq(label_trg.data).cpu().sum()
+                    correct_src[key] += pred_src[key].eq(label_src).cpu().sum()
+                    correct_trg[key] += pred_trg[key].eq(label_trg).cpu().sum()
 
                 size_src += label_src.data.size()[0]
                 size_trg += label_trg.data.size()[0]
@@ -392,7 +401,7 @@ class Solver(nn.Module):
         print("Source - {}".format(subset))
         acc, loss = dict(), dict()
         for key in ['di', 'ds', 'ci']:
-            acc[key] = correct_src[key] / size_src
+            acc[key] = float(correct_src[key]) / size_src
             loss[key] = loss_src[key] / size_src
             print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(key=key, acc=acc[key], loss=loss[key]))
         self.log_scalar(acc, prefix='{}_src_acc'.format(subset))
@@ -401,7 +410,7 @@ class Solver(nn.Module):
         print("Target - {}".format(subset))
         acc, loss = dict(), dict()
         for key in ['di', 'ds', 'ci']:
-            acc[key] = correct_trg[key] / size_src
+            acc[key] = float(correct_trg[key]) / size_src
             loss[key] = loss_trg[key] / size_src
             print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(key=key, acc=acc[key], loss=loss[key]))
         self.log_scalar(acc, prefix='{}_trg_acc'.format(subset))
