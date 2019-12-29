@@ -13,10 +13,11 @@ class Feature(nn.Module):
         self.bn2 = nn.BatchNorm2d(48)
 
     def forward(self, x):
-        x = torch.mean(x,1).view(x.size()[0],1,x.size()[2],x.size()[3])
-        x = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), stride=2, kernel_size=2, dilation=(1, 1))
-        x = F.max_pool2d(F.relu(self.bn2(self.conv2(x))), stride=2, kernel_size=2, dilation=(1, 1))
-        #print(x.size())
+        x = torch.mean(x, 1).view(x.size()[0], 1, x.size()[2], x.size()[3])
+        x = F.max_pool2d(F.relu(self.bn1(self.conv1(x))),
+                         stride=2, kernel_size=2, dilation=(1, 1))
+        x = F.max_pool2d(F.relu(self.bn2(self.conv2(x))),
+                         stride=2, kernel_size=2, dilation=(1, 1))
         x = x.view(x.size(0), 48*4*4)
         return x
 
@@ -34,6 +35,7 @@ class Predictor(nn.Module):
 
     def set_lambda(self, lambd):
         self.lambd = lambd
+
     def forward(self, x, reverse=False):
         if reverse:
             x = grad_reverse(x, self.lambd)

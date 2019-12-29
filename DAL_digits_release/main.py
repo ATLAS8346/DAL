@@ -18,7 +18,7 @@ parser.add_argument('--checkpoint_dir', type=str, default='checkpoint')
 parser.add_argument('--data_dir', type=str, default='./data/Digit-Five')
 parser.add_argument('--eval_only', action='store_true', default=False, help='evaluation only option')
 
-parser.add_argument('--max_epoch', type=int, default=200, metavar='N', help='how many epochs')
+parser.add_argument('--max_epoch', type=int, default=100, metavar='N', help='how many epochs')
 parser.add_argument('--batch-size', type=int, default=128, metavar='N', help='input batch size for training (default: 64)')
 parser.add_argument('--lr', type=float, default=0.0002, metavar='LR', help='learning rate (default: 0.0002)')
 parser.add_argument('--num_k', type=int, default=4, metavar='N', help='hyper paremeter for generator update')
@@ -55,17 +55,14 @@ def main():
     if args.eval_only:
         solver.test(0)
     else:
-        global_step = 0
         for epoch in range(args.max_epoch):
-            global_step = solver.train_epoch(epoch)
+            solver.train_epoch(epoch)
             if epoch % 1 == 0:
                 print("Epoch {}".format(epoch))
                 print("==========================")
                 solver.test(subset='train', save_model=args.save_model)
                 solver.test(subset='test', save_model=args.save_model)
                 print("==========================")
-            if global_step >= 20000:
-                break
 
 
 if __name__ == '__main__':

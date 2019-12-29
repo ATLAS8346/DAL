@@ -98,9 +98,11 @@ def dataset_read(base_dir, source, target, batch_size, scale=False, all_use='no'
     train_loader = UnalignedDataLoader(
         train_src, train_trg, batch_size, batch_size, scale=scale)
     dataset_train = train_loader.load_data()
+    print("Train batches: ", len(train_loader))
 
     test_loader = UnalignedDataLoader(
         test_src, test_trg, batch_size, batch_size, scale=scale)
     dataset_test = test_loader.load_data()
+    print("Test batches: ", len(test_loader))
 
     return dataset_train, dataset_test

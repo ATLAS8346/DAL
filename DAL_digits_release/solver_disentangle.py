@@ -63,6 +63,11 @@ class Solver(nn.Module):
             scale=self.scale, all_use=self.all_use)
         print('Done!')
 
+        self.total_batches = {
+            'train': self.get_dataset_size('train'),
+            'test': self.get_dataset_size('test')
+        }
+
         self.G = Generator(source=source, target=target)
         self.FD = Feature_Discriminator()
         self.R = Reconstructor()
@@ -94,6 +99,14 @@ class Solver(nn.Module):
         self.adv_loss = nn.BCEWithLogitsLoss().cuda()
         self.set_optimizer(which_opt=optimizer, lr=learning_rate)
         self.to_device()
+
+    def get_dataset_size(self, subset):
+        dataset = self.dataset_test if subset == 'test' else self.dataset_train
+        for batch_idx, data in enumerate(dataset):
+            img_src, img_trg = data['S'], data['T']
+            if (img_src.size()[0] < self.batch_size or
+                    img_trg.size()[0] < self.batch_size):
+                return batch_idx
 
     def to_device(self):
         for k, v in self.components.items():
@@ -308,40 +321,22 @@ class Solver(nn.Module):
         self.group_opt_step(['D_di', 'D_ci', 'D_ds', 'R'])
         return rec_loss_src, rec_loss_trg
 
-    def set_train(self):
-        for k in self.components.keys():
-            self.components[k].train()
-        for k in self.C.keys():
-            self.C[k].train()
-        for k in self.D.keys():
-            self.D[k].train()
-
-    def set_eval(self):
-        for k in self.components.keys():
-            self.components[k].eval()
-        for k in self.C.keys():
-            self.C[k].eval()
-        for k in self.D.keys():
-            self.D[k].eval()
-
     def train_epoch(self, epoch):
         # set training
-        self.set_train()
-        # torch.cuda.manual_seed(1)
-        total_batches = 500000
+        self.train()
+
+        total_batches = self.total_batches['train']
         pbar_descr_prefix = "Epoch %d" % (epoch)
         with tqdm(total=total_batches, ncols=80, dynamic_ncols=False,
                   desc=pbar_descr_prefix) as pbar:
 
             for batch_idx, data in enumerate(self.dataset_train):
-                if batch_idx > total_batches:
-                    return self.global_step
-
                 img_trg = data['T'].to(self.device)
                 img_src = data['S'].to(self.device)
                 label_src = data['S_label'].long().to(self.device)
 
-                if img_src.size()[0] < self.batch_size or img_trg.size()[0] < self.batch_size:
+                if (img_src.size()[0] < self.batch_size or
+                    img_trg.size()[0] < self.batch_size):
                     break
 
                 self.reset_grad()
@@ -354,13 +349,14 @@ class Solver(nn.Module):
                 self.adversarial_alignment(img_src, img_trg)
                 self.optimize_rec(img_src, img_trg)
                 # ================================== #
-
                 pbar.update()
                 self.global_step += 1
+
         return self.global_step
 
     def test(self, subset='test', save_model=False):
-        self.set_eval()
+        self.eval()
+
         dataset = self.dataset_test if subset == 'test' else self.dataset_train
         with torch.no_grad():
             loss_src, loss_trg = dict(), dict()
@@ -370,40 +366,47 @@ class Solver(nn.Module):
                 loss_src[key], loss_trg[key] = 0, 0
                 correct_src[key], correct_trg[key] = 0, 0
 
-            for batch_idx, data in enumerate(dataset):
-                img_src, label_src = data['S'], data['S_label'].long()
-                img_src, label_src = img_src.to(self.device), label_src.to(self.device)
+            pbar_descr_prefix = "Eval %s" % (subset)
+            with tqdm(total=self.total_batches[subset], ncols=80, dynamic_ncols=False,
+                      desc=pbar_descr_prefix) as pbar:
 
-                img_trg, label_trg = data['T'], data['T_label'].long()
-                img_trg, label_trg = img_trg.to(self.device), label_trg.to(self.device)
+                for batch_idx, data in enumerate(dataset):
+                    img_src, label_src = data['S'], data['S_label'].long()
+                    img_src, label_src = img_src.to(self.device), label_src.to(self.device)
 
-                out_src, out_trg = dict(), dict()
-                pred_src, pred_trg = dict(), dict()
+                    img_trg, label_trg = data['T'], data['T_label'].long()
+                    img_trg, label_trg = img_trg.to(self.device), label_trg.to(self.device)
 
-                feat_src = self.G(img_src)
-                feat_trg = self.G(img_trg)
-                for key in ['di', 'ds', 'ci']:
-                    out_src[key] = self.C[key](self.D[key](feat_src))
-                    out_trg[key] = self.C[key](self.D[key](feat_trg))
-                    # preds
-                    pred_src[key] = F.softmax(out_src[key], dim=1).max(1)[1]
-                    pred_trg[key] = F.softmax(out_trg[key], dim=1).max(1)[1]
-                    # losses
-                    loss_src[key] += F.cross_entropy(out_src[key], label_src, reduction='sum').item()
-                    loss_trg[key] += F.cross_entropy(out_trg[key], label_trg, reduction='sum').item()
-                    # correct predictions
-                    correct_src[key] += pred_src[key].eq(label_src).cpu().sum()
-                    correct_trg[key] += pred_trg[key].eq(label_trg).cpu().sum()
+                    out_src, out_trg = dict(), dict()
+                    pred_src, pred_trg = dict(), dict()
 
-                size_src += label_src.data.size()[0]
-                size_trg += label_trg.data.size()[0]
+                    feat_src = self.G(img_src)
+                    feat_trg = self.G(img_trg)
+                    for key in ['di', 'ds', 'ci']:
+                        out_src[key] = self.C[key](self.D[key](feat_src))
+                        out_trg[key] = self.C[key](self.D[key](feat_trg))
+                        # preds
+                        pred_src[key] = F.softmax(out_src[key], dim=1).max(1)[1]
+                        pred_trg[key] = F.softmax(out_trg[key], dim=1).max(1)[1]
+                        # losses
+                        loss_src[key] += F.cross_entropy(out_src[key], label_src, reduction='sum').item()
+                        loss_trg[key] += F.cross_entropy(out_trg[key], label_trg, reduction='sum').item()
+                        # correct predictions
+                        correct_src[key] += pred_src[key].eq(label_src).cpu().sum()
+                        correct_trg[key] += pred_trg[key].eq(label_trg).cpu().sum()
+
+                    size_src += label_src.data.size()[0]
+                    size_trg += label_trg.data.size()[0]
+
+                    pbar.update(1)
 
         print("Source - {}".format(subset))
         acc, loss = dict(), dict()
         for key in ['di', 'ds', 'ci']:
             acc[key] = float(correct_src[key]) / size_src
             loss[key] = loss_src[key] / size_src
-            print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(key=key, acc=acc[key], loss=loss[key]))
+            print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(
+                key=key, acc=acc[key], loss=loss[key]))
         self.log_scalar(acc, prefix='{}_src_acc'.format(subset))
         self.log_scalar(loss, prefix='{}_src_loss'.format(subset))
 
@@ -412,6 +415,7 @@ class Solver(nn.Module):
         for key in ['di', 'ds', 'ci']:
             acc[key] = float(correct_trg[key]) / size_src
             loss[key] = loss_trg[key] / size_src
-            print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(key=key, acc=acc[key], loss=loss[key]))
+            print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(
+                key=key, acc=acc[key], loss=loss[key]))
         self.log_scalar(acc, prefix='{}_trg_acc'.format(subset))
         self.log_scalar(loss, prefix='{}_trg_loss'.format(subset))
