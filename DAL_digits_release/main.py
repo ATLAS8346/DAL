@@ -58,52 +58,27 @@ if args.cuda:
     torch.cuda.set_device(args.gpu)
 print(args)
 
-
 def main():
-    # if not args.one_step:
-
     solver = Solver(args, source=args.source, target=args.target,
                     learning_rate=args.lr, batch_size=args.batch_size,
                     optimizer=args.optimizer, num_k=args.num_k,
                     all_use=args.all_use, checkpoint_dir=args.checkpoint_dir,
                     save_epoch=args.save_epoch)
-    record_num = 0
-    if args.source == 'usps' or args.target == 'usps':
-
-        record_train = '%s/%s_%s_k_%s_alluse_%s_onestep_%s_%s.txt' % (
-            args.recordfolder, args.source, args.target, args.num_k, args.all_use, args.one_step, record_num)
-        record_test = '%s/%s_%s_k_%s_alluse_%s_onestep_%s_%s_test.txt' % (
-            args.recordfolder, args.source, args.target, args.num_k, args.all_use, args.one_step, record_num)
-        while os.path.exists(record_train):
-            record_num += 1
-            record_train = '%s/%s_%s_k_%s_alluse_%s_onestep_%s_%s.txt' % (
-                args.recordfolder, args.source, args.target, args.num_k, args.all_use, args.one_step, record_num)
-            record_test = '%s/%s_%s_k_%s_alluse_%s_onestep_%s_%s_test.txt' % (
-                args.recordfolder, args.source, args.target, args.num_k, args.all_use, args.one_step, record_num)
-    else:
-        record_train = '%s/%s_%s_k_%s_onestep_%s_%s.txt' % (
-            args.recordfolder, args.source, args.target, args.num_k, args.one_step, record_num)
-        record_test = '%s/%s_%s_k_%s_onestep_%s_%s_test.txt' % (
-            args.recordfolder, args.source, args.target, args.num_k, args.one_step, record_num)
-        while os.path.exists(record_train):
-            record_num += 1
-            record_train = '%s/%s_%s_k_%s_onestep_%s_%s.txt' % (
-                args.recordfolder, args.source, args.target, args.num_k, args.one_step, record_num)
-            record_test = '%s/%s_%s_k_%s_onestep_%s_%s_test.txt' % (
-                args.recordfolder, args.source, args.target, args.num_k, args.one_step, record_num)
-
     if not os.path.exists(args.checkpoint_dir):
         os.mkdir(args.checkpoint_dir)
-    if not os.path.exists(args.recordfolder):
-        os.mkdir(args.recordfolder)
+
     if args.eval_only:
         solver.test(0)
     else:
         global_step = 0
         for epoch in range(args.max_epoch):
-            global_step = solver.train_epoch(epoch, global_step, record_file=record_train)
+            global_step = solver.train_epoch(epoch)
             if epoch % 1 == 0:
-                solver.test(epoch, record_file=record_test, save_model=args.save_model)
+                print("Epoch {}".format(epoch))
+                print("==========================")
+                solver.test(epoch, subset='train', save_model=args.save_model)
+                solver.test(epoch, subset='test', save_model=args.save_model)
+                print("==========================")
             if global_step >= 20000:
                 break
 

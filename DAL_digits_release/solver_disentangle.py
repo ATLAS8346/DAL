@@ -19,11 +19,13 @@ from torch.utils.tensorboard import SummaryWriter
 from time import gmtime, strftime
 from tqdm import tqdm
 
-class Solver():
+class Solver(nn.Module):
     def __init__(self, args, batch_size=64, source='svhn',
                  target='mnist', learning_rate=0.0002, interval=1,
                  optimizer='adam', num_k=4, all_use=False,
                  checkpoint_dir=None, save_epoch=10):
+
+        super().__init__()
 
         timestring = strftime("%Y-%m-%d_%H-%M-%S", gmtime()) + "_%s" % args.exp_name
         self.logdir = os.path.join('./logs', timestring)
@@ -53,12 +55,13 @@ class Solver():
         self.batch_size = batch_size
         self.lr = learning_rate
         self.scale = False
+        self.global_step = 0
 
-        print('dataset loading')
-        self.datasets, self.dataset_test = dataset_read(
+        print('Loading datasets')
+        self.dataset_train, self.dataset_test = dataset_read(
             source, target, self.batch_size,
             scale=self.scale, all_use=self.all_use)
-        print('load finished!')
+        print('Done!')
 
         self.G = Generator(source=source, target=target)
         self.FD = Feature_Discriminator()
@@ -75,7 +78,7 @@ class Solver():
             'ds': Disentangler(), 'di': Disentangler(), 'ci': Disentangler()})
 
         # All modules in the same dict
-        self.modules = nn.ModuleDict({
+        self.components = nn.ModuleDict({
             'G': self.G, 'FD': self.FD, 'R': self.R, 'MI': self.MI
         })
 
@@ -93,8 +96,8 @@ class Solver():
         self.to_device()
 
     def to_device(self):
-        for k, v in self.modules.items():
-            self.modules[k] = v.cuda()
+        for k, v in self.components.items():
+            self.components[k] = v.cuda()
 
         for k, v in self.C.items():
             self.C[k] = v.cuda()
@@ -129,12 +132,21 @@ class Solver():
             self.opt[k].step()
         self.reset_grad()
 
+    def log_scalar(self, _loss, prefix=''):
+        if self.global_step % self.interval == 0:
+            for k, val in _loss.items():
+                self.logger.add_scalar(
+                    "%s/%s" % (prefix, k), val,
+                    global_step=self.global_step)
+
     def optimize_classifier(self, img_src, label_src):
-        feat_src = self.G(img_src)
         _loss = dict()
+        feat_src = self.G(img_src)
         for key in ['ds', 'di', 'ci']:
-            _loss['class_src_' + key] = self.xent_loss(
+            k = "class_src_%s" % key
+            _loss[k] = self.xent_loss(
                 self.C[key](self.D[key](feat_src)), label_src)
+        self.log_scalar(_loss, prefix='class_loss')
 
         _sum_loss = sum([l for _, l in _loss.items()])
         _sum_loss.backward()
@@ -142,21 +154,22 @@ class Solver():
         return _loss
 
     def discrepancy_minimizer(self, img_src, img_trg, label_src):
-        # ================================== #
-        # NOTE: I'm still not sure why we need this
-
         _loss = dict()
+        # NOTE: I'm still not sure why we need this
         # on source domain
+        feat_src = self.G(img_src)
         _loss['ds_src'] = self.xent_loss(
-            self.C['ds'](self.D['ds'](self.G(img_src))), label_src)
+            self.C['ds'](self.D['ds'](feat_src)), label_src)
         _loss['di_src'] = self.xent_loss(
-            self.C['di'](self.D['di'](self.G(img_src))), label_src)
+            self.C['di'](self.D['di'](feat_src)), label_src)
 
         # on target domain
+        feat_trg = self.G(img_trg)
         _loss['discrepancy_ds_di_trg'] = _discrepancy(
-            self.C['ds'](self.D['ds'](self.G(img_trg))),
-            self.C['di'](self.D['di'](self.G(img_trg))))
+            self.C['ds'](self.D['ds'](feat_trg)),
+            self.C['di'](self.D['di'](feat_trg)))
 
+        self.log_scalar(_loss, prefix='dis_loss')
         _sum_loss = sum([l for _, l in _loss.items()])
         _sum_loss.backward()
         self.group_opt_step(['D_ds', 'D_di', 'C_ds', 'C_di'])
@@ -168,6 +181,8 @@ class Solver():
         ring_loss = _ring(feat)
         ring_loss.backward()
         self.group_opt_step(['G'])
+        self.log_scalar({'ring': ring_loss}, 'extra_loss')
+
         return ring_loss
 
     def mutual_information_minimizer(self, img_src, img_trg):
@@ -175,9 +190,10 @@ class Solver():
         # minimize mutual information between (ds, di) and (ci, di)
 
         for i in range(0, self.mi_k):
-            ds_src, ds_trg = self.D['ds'](self.G(img_src)), self.D['ds'](self.G(img_trg))
-            di_src, di_trg = self.D['di'](self.G(img_src)), self.D['di'](self.G(img_trg))
-            ci_src, ci_trg = self.D['ci'](self.G(img_src)), self.D['ci'](self.G(img_trg))
+            feat_src, feat_trg = self.G(img_src), self.G(img_trg)
+            ds_src, ds_trg = self.D['ds'](feat_src), self.D['ds'](feat_trg)
+            di_src, di_trg = self.D['di'](feat_src), self.D['di'](feat_trg)
+            ci_src, ci_trg = self.D['ci'](feat_src), self.D['ci'](feat_trg)
 
             di_src_shuffle = torch.index_select(
                 di_src, 0, torch.randperm(di_src.shape[0]).to(self.device))
@@ -195,6 +211,8 @@ class Solver():
             MI = 0.25 * (MI_ds_di_src + MI_ds_di_trg + MI_ci_di_src + MI_ci_di_trg) * self.mi_coeff
             MI.backward()
             self.group_opt_step(['D_ds', 'D_di', 'D_ci', 'MI'])
+
+        self.log_scalar({'ds_di': MI_ds_di, 'ci_di': MI_ci_di}, prefix='MI')
         # pred_di_ci_src = self.M(out_di_src, out_ci_src)
         return MI_ds_di, MI_ci_di
 
@@ -204,8 +222,11 @@ class Solver():
         # f_ci = CI(G(im)) extracts features that are class irrelevant
         # by maximizing the entropy, given that the classifier is fixed
         _loss = dict()
-        _loss['src_ci'] = _ent(self.C['ci'](self.D['ci'](self.G(img_src))))
-        _loss['trg_ci'] = _ent(self.C['ci'](self.D['ci'](self.G(img_trg))))
+        feat_src = self.G(img_src)
+        _loss['src_ci'] = _ent(self.C['ci'](self.D['ci'](feat_src)))
+        _loss['trg_ci'] = _ent(self.C['ci'](self.D['ci'](feat_src)))
+        self.log_scalar(_loss, prefix='confusion_loss')
+
         _sum_loss = sum([l for _, l in _loss.items()])
         _sum_loss.backward()
         self.group_opt_step(['D_ci', 'G'])
@@ -236,11 +257,19 @@ class Solver():
         self.group_opt_step(['FD', 'D_di', 'G'])
 
         for _ in range(self.num_k):
+            feat_trg = self.G(img_trg)
             loss_dis = _discrepancy(
-                self.C['ds'](self.D['ds'](self.G(img_trg))),
-                self.C['di'](self.D['di'](self.G(img_trg))))
+                self.C['ds'](self.D['ds'](feat_trg)),
+                self.C['di'](self.D['di'](feat_trg)))
             loss_dis.backward()
             self.group_opt_step(['G'])
+
+        self.log_scalar(
+            {'alignment_loss1': alignment_loss1,
+             'alignment_loss2': alignment_loss2,
+             'discrepancy_ds_di_trg': loss_dis},
+            prefix='adv_loss')
+
         return alignment_loss1, alignment_loss2, loss_dis
 
     def optimize_rec(self, img_src, img_trg):
@@ -267,15 +296,18 @@ class Solver():
             else:
                 recon_loss += rec_loss_src[k] + rec_loss_trg[k]
 
+        self.log_scalar(rec_loss_src, prefix='rec_loss_src')
+        self.log_scalar(rec_loss_trg, prefix='rec_loss_trg')
+
         recon_loss = (recon_loss / 4) * self.delta
         recon_loss.backward()
         self.group_opt_step(['D_di', 'D_ci', 'D_ds', 'R'])
         return rec_loss_src, rec_loss_trg
 
-    def train_epoch(self, epoch, global_step, record_file=None):
+    def train_epoch(self, epoch):
         # set training
-        for k in self.modules.keys():
-            self.modules[k].train()
+        for k in self.components.keys():
+            self.components[k].train()
         for k in self.C.keys():
             self.C[k].train()
         for k in self.D.keys():
@@ -286,9 +318,10 @@ class Solver():
         pbar_descr_prefix = "Epoch %d" % (epoch)
         with tqdm(total=total_batches, ncols=80, dynamic_ncols=False,
                   desc=pbar_descr_prefix) as pbar:
-            for batch_idx, data in enumerate(self.datasets):
+
+            for batch_idx, data in enumerate(self.dataset_train):
                 if batch_idx > total_batches:
-                    return global_step
+                    return self.global_step
 
                 img_trg = data['T'].to(self.device)
                 img_src = data['S'].to(self.device)
@@ -299,130 +332,77 @@ class Solver():
 
                 self.reset_grad()
                 # ================================== #
-                class_loss = self.optimize_classifier(img_src, label_src)
-                dis_loss = self.discrepancy_minimizer(img_src, img_trg, label_src)
-                ring_loss = self.ring_loss_minimizer(img_src, img_trg)
-                MI_ds_di, MI_ci_di = self.mutual_information_minimizer(img_src, img_trg)
-                confusion_loss = self.class_confusion(img_src, img_trg)
-                (alignment_loss1, alignment_loss2, discrepancy_loss) = self.adversarial_alignment(
-                    img_src, img_trg)
-                rec_loss_src, rec_loss_trg = self.optimize_rec(img_src, img_trg)
+                self.optimize_classifier(img_src, label_src)
+                self.discrepancy_minimizer(img_src, img_trg, label_src)
+                self.ring_loss_minimizer(img_src, img_trg)
+                self.mutual_information_minimizer(img_src, img_trg)
+                self.class_confusion(img_src, img_trg)
+                self.adversarial_alignment(img_src, img_trg)
+                self.optimize_rec(img_src, img_trg)
                 # ================================== #
 
-                if batch_idx % self.interval == 0:
-                    # ================================== #
-                    for key, val in class_loss.items():
-                        self.logger.add_scalar(
-                            "class_loss/%s" % key, val,
-                            global_step=global_step)
-
-                    for key, val in dis_loss.items():
-                        self.logger.add_scalar(
-                            "dis_loss/%s" % key, val,
-                            global_step=global_step)
-
-                    for key, val in confusion_loss.items():
-                        self.logger.add_scalar(
-                            "confusion_loss/%s" % key, val,
-                            global_step=global_step)
-
-                    for key, val in rec_loss_src.items():
-                        self.logger.add_scalar(
-                            "rec_loss_src/%s" % key, val,
-                            global_step=global_step)
-
-                    for key, val in rec_loss_trg.items():
-                        self.logger.add_scalar(
-                            "rec_loss_trg/%s" % key, val,
-                            global_step=global_step)
-
-                    self.logger.add_scalar(
-                        "extra_loss/alignment_loss1", alignment_loss1,
-                        global_step=global_step)
-
-                    self.logger.add_scalar(
-                        "extra_loss/alignment_loss2", alignment_loss2,
-                        global_step=global_step)
-
-                    self.logger.add_scalar(
-                        "extra_loss/discrepancy_ds_di_trg", discrepancy_loss,
-                        global_step=global_step)
-
-                    self.logger.add_scalar(
-                        "extra_loss/ring", ring_loss,
-                        global_step=global_step)
-
-                    self.logger.add_scalar(
-                        "MI/ds_di", MI_ds_di,
-                        global_step=global_step)
-
-                    self.logger.add_scalar(
-                        "MI/ci_di", MI_ci_di,
-                        global_step=global_step)
-                    # ================================== #
                 pbar.update()
-                global_step += 1
-        return global_step
+                self.global_step += 1
+        return self.global_step
 
-    def test(self, epoch, record_file=None, save_model=False):
+    def test(self, epoch, subset='test', save_model=False):
         self.G.eval()
         self.D['di'].eval()
         self.D['ds'].eval()
         self.C['di'].eval()
         self.C['ds'].eval()
-        test_loss = 0
-        size = 0
-        correct1, correct2, correct3 = 0, 0, 0
+
+        dataset = self.dataset_test if subset == 'test' else self.dataset_train
         with torch.no_grad():
-            for batch_idx, data in enumerate(self.dataset_test):
-                img, label = data['T'], data['T_label'].long()
-                img, label = img.to(self.device), label.to(self.device)
+            loss_src, loss_trg = dict(), dict()
+            correct_src, correct_trg = dict(), dict()
+            size_src, size_trg = 0, 0
+            for key in ['di', 'ds', 'ci']:
+                loss_src[key], loss_trg[key] = 0, 0
+                correct_src[key], correct_trg[key] = 0, 0
 
-                feat = self.G(img)
-                out1 = self.C['di'](self.D['di'](feat))
-                out2 = self.C['ds'](self.D['ds'](feat))
-                test_loss += F.nll_loss(out1, label).item()
+            for batch_idx, data in enumerate(dataset):
+                img_src, label_src = data['S'], data['S_label'].long()
+                img_src, label_src = img_src.to(self.device), label_src.to(self.device)
 
-                out_ensemble = out1 + out2
-                predi = out1.data.max(1)[1]
-                preci = out2.data.max(1)[1]
-                pred_ensemble = out_ensemble.data.max(1)[1]
+                img_trg, label_trg = data['T'], data['T_label'].long()
+                img_trg, label_trg = img_src.to(self.device), label_src.to(self.device)
 
-                k = label.data.size()[0]
-                correct1 += predi.eq(label.data).cpu().sum()
-                correct2 += preci.eq(label.data).cpu().sum()
-                correct3 += pred_ensemble.eq(label.data).cpu().sum()
-                size += k
-                # record = open('conf_{}.txt'.format(epoch), 'a')
-                # for tmp_index in range(0, len(predi)):
-                #     record.write('%d %d\n' % (label.data[tmp_index], predi[tmp_index]))
-                # record.close()
+                out_src, out_trg = dict(), dict()
+                pred_src, pred_trg = dict(), dict()
 
-        test_loss = test_loss / size
-        acc1 = 100. * correct1 / size
-        acc2 = 100. * correct2 / size
-        acc3 = 100. * correct3 / size
+                feat_src = self.G(img_src)
+                feat_trg = self.G(img_trg)
+                for key in ['di', 'ds', 'ci']:
+                    out_src[key] = self.C[key](self.D[key](feat_src))
+                    out_trg[key] = self.C[key](self.D[key](feat_trg))
+                    # preds
+                    pred_src[key] = F.softmax(out_src[key], dim=1).max(1)[1]
+                    pred_trg[key] = F.softmax(out_trg[key], dim=1).max(1)[1]
+                    # losses
+                    loss_src[key] += F.cross_entropy(out_src[key], label_src, reduction='sum').item()
+                    loss_trg[key] += F.cross_entropy(out_trg[key], label_trg, reduction='sum').item()
+                    # correct predictions
+                    correct_src[key] += pred_src[key].eq(label_src.data).cpu().sum()
+                    correct_trg[key] += pred_trg[key].eq(label_trg.data).cpu().sum()
 
-        print('\nTest set: Average loss: {:.4f}, Accuracy C1: {}/{} ({:.0f}%) Accuracy C2: {}/{} ({:.0f}%) Accuracy Ensemble: {}/{} ({:.0f}%) \n'.format(
-            test_loss,
-            correct1, size, acc1,
-            correct2, size, acc2,
-            correct3, size, acc3))
+                size_src += label_src.data.size()[0]
+                size_trg += label_trg.data.size()[0]
 
-        self.logger.add_scalar(
-            "test_target_acc/di", acc1,
-            global_step=epoch)
+        print("Source - {}".format(subset))
+        acc, loss = dict(), dict()
+        for key in ['di', 'ds', 'ci']:
+            acc[key] = correct_src[key] / size_src
+            loss[key] = loss_src[key] / size_src
+            print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(key=key, acc=acc[key], loss=loss[key]))
+        self.log_scalar(acc, prefix='{}_src_acc'.format(subset))
+        self.log_scalar(loss, prefix='{}_src_loss'.format(subset))
 
-        self.logger.add_scalar(
-            "test_target_acc/ds", acc2,
-            global_step=epoch)
-
-        self.logger.add_scalar(
-            "test_target_acc/max_ensemble", acc3,
-            global_step=epoch)
-
-        # if record_file:
-        #     record = open(record_file, 'a')
-        #     print('recording %s', record_file)
-        #     record.write('%s %s %s\n' % (float(correct1) / size, float(correct2) / size, float(correct3) / size))
-        #     record.close()
+        print("Target - {}".format(subset))
+        acc, loss = dict(), dict()
+        for key in ['di', 'ds', 'ci']:
+            acc[key] = correct_trg[key] / size_src
+            loss[key] = loss_trg[key] / size_src
+            print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(key=key, acc=acc[key], loss=loss[key]))
+        self.log_scalar(acc, prefix='{}_trg_acc'.format(subset))
+        self.log_scalar(loss, prefix='{}_trg_loss'.format(subset))
