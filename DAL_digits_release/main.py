@@ -13,7 +13,6 @@ sys.path.append('./metric')
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch DAL Implementation')
-parser.add_argument('--all_use', type=str, default='no', metavar='N', help='use all training data? in usps adaptation')
 parser.add_argument('--checkpoint_dir', type=str, default='checkpoint')
 parser.add_argument('--data_dir', type=str, default='./data/Digit-Five')
 parser.add_argument('--eval_only', action='store_true', default=False, help='evaluation only option')
@@ -30,7 +29,7 @@ parser.add_argument('--save_model', action='store_true', default=False, help='sa
 parser.add_argument('--seed', type=int, default=1, metavar='S', help='random seed (default: 1)')
 
 parser.add_argument('--source', type=str, default='svhn', metavar='N', help='source dataset')
-parser.add_argument('--target', type=str, default='agnostic', metavar='N', help='target dataset')
+parser.add_argument('--target', type=str, default=None, metavar='N', help='target dataset')
 parser.add_argument('--use_abs_diff', action='store_true', default=False, help='use absolute difference value as a measurement')
 
 parser.add_argument('--exp_name', type=str, default='test', metavar='N')
@@ -44,11 +43,7 @@ if args.cuda:
 pprint(args)
 
 def main():
-    solver = Solver(args, source=args.source, target=args.target,
-                    learning_rate=args.lr, batch_size=args.batch_size,
-                    optimizer=args.optimizer, num_k=args.num_k,
-                    all_use=args.all_use, checkpoint_dir=args.checkpoint_dir,
-                    save_epoch=args.save_epoch)
+    solver = Solver(args)
     if not os.path.exists(args.checkpoint_dir):
         os.mkdir(args.checkpoint_dir)
 

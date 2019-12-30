@@ -3,6 +3,7 @@ import torch.utils.data as data
 from PIL import Image
 import numpy as np
 
+
 class Dataset(data.Dataset):
     """Args:
         transform (callable, optional): A function/transform that  takes in an PIL image
@@ -33,12 +34,11 @@ class Dataset(data.Dataset):
         # to return a PIL Image
         # print(img.shape)
         if img.shape[0] != 1:
-            #print(img)
+            # print(img)
             img = Image.fromarray(np.uint8(np.asarray(img.transpose((1, 2, 0)))))
-        
         elif img.shape[0] == 1:
             im = np.uint8(np.asarray(img))
-            #print(np.vstack([im,im,im]).shape)
+            # print(np.vstack([im,im,im]).shape)
             im = np.vstack([im, im, im]).transpose((1, 2, 0))
             img = Image.fromarray(im)
 
@@ -48,5 +48,6 @@ class Dataset(data.Dataset):
             img = self.transform(img)
             # return img, target
         return img, target
+
     def __len__(self):
         return len(self.data)

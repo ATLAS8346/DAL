@@ -7,7 +7,7 @@ sys.path.append('../utils/')
 from utils.utils import dense_to_one_hot
 
 
-def load_usps(base_dir, all_use=False):
+def load_usps(base_dir):
     dataset = loadmat(base_dir + '/usps_28x28.mat')
     data_set = dataset['dataset']
     img_train = data_set[0][0]
@@ -25,12 +25,12 @@ def load_usps(base_dir, all_use=False):
 
     label_train = dense_to_one_hot(label_train)
     label_test = dense_to_one_hot(label_test)
-    img_train = np.concatenate([ img_train, img_train, img_train], 1)
+    img_train = np.concatenate([img_train, img_train, img_train], 1)
     img_test = np.concatenate([img_test, img_test, img_test], 1)
 
-    print('usps train X shape->',  img_train.shape)
-    print('usps train y shape->',  label_train.shape)
-    print('usps test X shape->',  img_test.shape)
+    print('usps train X shape->', img_train.shape)
+    print('usps train y shape->', label_train.shape)
+    print('usps test X shape->', img_test.shape)
     print('usps test y shape->', label_test.shape)
     print("====================")
 

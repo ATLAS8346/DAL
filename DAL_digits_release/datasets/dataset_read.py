@@ -11,22 +11,22 @@ from .synth_number import load_syn
 # from .gtsrb import load_gtsrb
 
 
-def return_dataset(data, base_dir, scale=False, usps=False, all_use='no'):
+def return_dataset(data, base_dir, scale=28):
 
     if data == 'svhn':
-        return load_svhn(base_dir)
+        return load_svhn(base_dir, scale=scale)
 
     elif data == 'mnist':
-        return load_mnist(base_dir, scale=scale, usps=usps, all_use=all_use)
+        return load_mnist(base_dir, scale=scale)
 
     elif data == 'usps':
-         return load_usps(base_dir, all_use=all_use)
+        return load_usps(base_dir)
 
     elif data == 'mnistm':
         return load_mnistm(base_dir)
 
     elif data == 'syn':
-        return load_syn(base_dir)
+        return load_syn(base_dir, scale=scale)
 
     # elif data == 'synth':
     #     return load_syntraffic(base_dir)
@@ -38,28 +38,31 @@ def return_dataset(data, base_dir, scale=False, usps=False, all_use='no'):
         raise NotImplementedError("Dataset not found")
 
 
-def dataset_read(base_dir, source, target, batch_size, scale=False, all_use='no'):
+def dataset_read(base_dir, source, target, batch_size, scale=32):
 
     train_src, test_src = {}, {}
     train_trg, test_trg = {}, {}
 
-    usps = True if source == 'usps' or target == 'usps' else False
+    if target is None:
+        domain_all = ['mnistm', 'mnist', 'usps', 'svhn', 'syn']
+        domain_all.remove(source)
+    else:
+        domain_all = [target]
 
-    # domain_all = ['mnistm', 'mnist', 'usps', 'svhn', 'syn']
-    domain_all = ['mnistm', 'mnist', 'usps', 'svhn']
-    domain_all.remove(source)
+    # NOTE: scale here, is first fixed to 28 to retrieve images of the same size
+    # scale=32 is used byt the dataloader to rescale images at train/test time
 
     # get source domain
     (train_src_img, train_src_label,
      test_src_img, test_src_label) = return_dataset(
-         source, base_dir, scale=scale, usps=usps, all_use=all_use)
+         source, base_dir, scale=28)
 
     # get target domains
     train_trg_img, train_trg_label = [], []
     test_trg_img, test_trg_label = [], []
     for i in range(len(domain_all)):
         (_train_img, _train_label, _test_img, _test_label) = return_dataset(
-            domain_all[i], base_dir, scale=scale, usps=usps, all_use=all_use)
+            domain_all[i], base_dir, scale=28)
 
         train_trg_img.append(_train_img)
         train_trg_label.append(_train_label)
@@ -93,7 +96,6 @@ def dataset_read(base_dir, source, target, batch_size, scale=False, all_use='no'
     test_src['labels'] = test_src_label
     test_trg['imgs'] = test_trg_img
     test_trg['labels'] = test_trg_label
-    scale = 32 if source == 'synth' else 32 if source == 'usps' or target == 'usps' else 32
 
     train_loader = UnalignedDataLoader(
         train_src, train_trg, batch_size, batch_size, scale=scale)

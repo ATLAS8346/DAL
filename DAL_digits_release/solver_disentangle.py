@@ -20,10 +20,7 @@ from time import gmtime, strftime
 from tqdm import tqdm
 
 class Solver(nn.Module):
-    def __init__(self, args, batch_size=64, source='svhn',
-                 target='mnist', learning_rate=0.0002, interval=1,
-                 optimizer='adam', num_k=4, all_use=False,
-                 checkpoint_dir=None, save_epoch=10):
+    def __init__(self, args):
 
         super().__init__()
 
@@ -33,34 +30,35 @@ class Solver(nn.Module):
         self.device = torch.device("cuda" if args.use_cuda else "cpu")
 
         self.src_domain_code = np.repeat(
-            np.array([[*([1]), *([0])]]), batch_size, axis=0)
+            np.array([[*([1]), *([0])]]), args.batch_size, axis=0)
         self.trg_domain_code = np.repeat(
-            np.array([[*([0]), *([1])]]), batch_size, axis=0)
+            np.array([[*([0]), *([1])]]), args.batch_size, axis=0)
         self.src_domain_code = torch.FloatTensor(
             self.src_domain_code).to(self.device)
         self.trg_domain_code = torch.FloatTensor(
             self.trg_domain_code).to(self.device)
 
-        self.source = source
-        self.target = target
-        self.num_k = num_k
-        self.mi_k = 1
-        self.checkpoint_dir = checkpoint_dir
-        self.save_epoch = save_epoch
+        self.source = args.source
+        self.target = args.target
+        self.num_k = args.num_k
+        self.checkpoint_dir = args.checkpoint_dir
+        self.save_epoch = args.save_epoch
         self.use_abs_diff = args.use_abs_diff
-        self.all_use = all_use
+
+        self.mi_k = 1
         self.delta = 0.01
         self.mi_coeff = 0.0001
-        self.interval = interval
-        self.batch_size = batch_size
-        self.lr = learning_rate
-        self.scale = False
+        self.interval = 10  # write on tb every
+        self.batch_size = args.batch_size
+        self.which_opt = 'adam'
+        self.lr = args.lr
+        self.scale = 32
         self.global_step = 0
 
         print('Loading datasets')
         self.dataset_train, self.dataset_test = dataset_read(
-            args.data_dir, source, target, self.batch_size,
-            scale=self.scale, all_use=self.all_use)
+            args.data_dir, self.source, self.target,
+            self.batch_size, self.scale)
         print('Done!')
 
         self.total_batches = {
@@ -68,15 +66,15 @@ class Solver(nn.Module):
             'test': self.get_dataset_size('test')
         }
 
-        self.G = Generator(source=source, target=target)
+        self.G = Generator(source=self.source, target=self.target)
         self.FD = Feature_Discriminator()
         self.R = Reconstructor()
         self.MI = Mine()
 
         self.C = nn.ModuleDict({
-            'ds': Classifier(source=source, target=target),
-            'di': Classifier(source=source, target=target),
-            'ci': Classifier(source=source, target=target)
+            'ds': Classifier(source=self.source, target=self.target),
+            'di': Classifier(source=self.source, target=self.target),
+            'ci': Classifier(source=self.source, target=self.target)
         })
 
         self.D = nn.ModuleDict({
@@ -87,26 +85,21 @@ class Solver(nn.Module):
             'G': self.G, 'FD': self.FD, 'R': self.R, 'MI': self.MI
         })
 
-        if args.eval_only:
-            self.G.torch.load('%s/%s_to_%s_model_epoch%s_G.pt' % (
-                self.checkpoint_dir, self.source, self.target, args.resume_epoch))
-            self.G.torch.load('%s/%s_to_%s_model_epoch%s_G.pt' % (
-                self.checkpoint_dir, self.source, self.target, args.resume_epoch))
-            self.G.torch.load('%s/%s_to_%s_model_epoch%s_G.pt' % (
-                self.checkpoint_dir, self.source, self.target, args.resume_epoch))
-
         self.xent_loss = nn.CrossEntropyLoss().cuda()
         self.adv_loss = nn.BCEWithLogitsLoss().cuda()
-        self.set_optimizer(which_opt=optimizer, lr=learning_rate)
+        self.set_optimizer(which_opt=self.which_opt, lr=self.lr)
         self.to_device()
 
     def get_dataset_size(self, subset):
         dataset = self.dataset_test if subset == 'test' else self.dataset_train
+        count = 0
         for batch_idx, data in enumerate(dataset):
             img_src, img_trg = data['S'], data['T']
             if (img_src.size()[0] < self.batch_size or
                     img_trg.size()[0] < self.batch_size):
-                return batch_idx
+                continue
+            count += 1
+        return count
 
     def to_device(self):
         for k, v in self.components.items():
@@ -337,7 +330,7 @@ class Solver(nn.Module):
 
                 if (img_src.size()[0] < self.batch_size or
                     img_trg.size()[0] < self.batch_size):
-                    break
+                    continue
 
                 self.reset_grad()
                 # ================================== #

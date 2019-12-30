@@ -6,15 +6,16 @@ sys.path.append('../utils/')
 from utils.utils import dense_to_one_hot
 
 
-def load_syn(base_dir, scale=True, usps=False, all_use=False):
-    syn_train = loadmat(base_dir + '/synth_train_28x28.mat')
-    syn_test = loadmat(base_dir + '/synth_test_28x28.mat')
+def load_syn(base_dir, scale=32):
+    syn_train = loadmat(base_dir + '/synth_train_{}x{}.mat'.format(scale, scale))
+    syn_test = loadmat(base_dir + '/synth_test_{}x{}.mat'.format(scale, scale))
+
     syn_train_im = syn_train['X']
     syn_train_im = syn_train_im.transpose(3, 2, 0, 1).astype(np.float32)
-    train_label = dense_to_one_hot(syn_train['y'])
+    train_label = dense_to_one_hot(syn_train['y'].squeeze())
     syn_test_im = syn_test['X']
     syn_test_im = syn_test_im.transpose(3, 2, 0, 1).astype(np.float32)
-    test_label = dense_to_one_hot(syn_test['y'])
+    test_label = dense_to_one_hot(syn_test['y'].squeeze())
 
     print('syn number train X shape->', syn_train_im.shape)
     print('syn number train y shape->', train_label.shape)

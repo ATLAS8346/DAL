@@ -2,9 +2,9 @@ import numpy as np
 from scipy.io import loadmat
 
 
-def load_mnist(base_dir, scale=True, usps=False, all_use=False):
+def load_mnist(base_dir, scale=32):
     mnist_data = loadmat(base_dir + '/mnist_data.mat')
-    if scale:
+    if scale == 32:
         print('Loading MNIST 32x32')
         mnist_train = np.reshape(mnist_data['train_32'], (55000, 32, 32, 1))
         mnist_test = np.reshape(mnist_data['test_32'], (10000, 32, 32, 1))
@@ -14,7 +14,7 @@ def load_mnist(base_dir, scale=True, usps=False, all_use=False):
         mnist_test = mnist_test.transpose(0, 3, 1, 2).astype(np.float32)
         mnist_labels_train = mnist_data['label_train']
         mnist_labels_test = mnist_data['label_test']
-    else:
+    elif scale == 28:
         print('Loading MNIST 28x28')
         mnist_train = mnist_data['train_28']
         mnist_test = mnist_data['test_28']
@@ -26,6 +26,8 @@ def load_mnist(base_dir, scale=True, usps=False, all_use=False):
         mnist_test = mnist_test.astype(np.float32)
         mnist_train = mnist_train.transpose((0, 3, 1, 2))
         mnist_test = mnist_test.transpose((0, 3, 1, 2))
+    else:
+        NotImplementedError("Scale Not found")
 
     train_label = np.argmax(mnist_labels_train, axis=1)
     inds = np.random.permutation(mnist_train.shape[0])

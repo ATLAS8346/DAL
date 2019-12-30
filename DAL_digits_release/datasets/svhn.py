@@ -6,9 +6,9 @@ sys.path.append('./utils/')
 from utils.utils import dense_to_one_hot
 
 
-def load_svhn(base_dir):
-    svhn_train = loadmat(base_dir + '/svhn_train_28x28.mat')
-    svhn_test = loadmat(base_dir + '/svhn_test_28x28.mat')
+def load_svhn(base_dir, scale=32):
+    svhn_train = loadmat(base_dir + '/svhn_train_{}x{}.mat'.format(scale, scale))
+    svhn_test = loadmat(base_dir + '/svhn_test_{}x{}.mat'.format(scale, scale))
     svhn_train_im = svhn_train['X']
     svhn_train_im = svhn_train_im.transpose(3, 2, 0, 1).astype(np.float32)
     svhn_label = dense_to_one_hot(svhn_train['y'])
