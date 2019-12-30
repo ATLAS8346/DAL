@@ -233,8 +233,9 @@ class Solver(nn.Module):
         # by maximizing the entropy, given that the classifier is fixed
         _loss = dict()
         feat_src = self.G(img_src)
+        feat_trg = self.G(img_trg)
         _loss['src_ci'] = _ent(self.C['ci'](self.D['ci'](feat_src)))
-        _loss['trg_ci'] = _ent(self.C['ci'](self.D['ci'](feat_src)))
+        _loss['trg_ci'] = _ent(self.C['ci'](self.D['ci'](feat_trg)))
         self.log_scalar(_loss, prefix='confusion_loss')
 
         _sum_loss = sum([l for _, l in _loss.items()])
