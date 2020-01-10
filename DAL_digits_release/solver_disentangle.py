@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from model.build_gen import Disentangler, Generator, Classifier, Feature_Discriminator, Reconstructor, Mine
 from datasets.dataset_read import dataset_read
-from utils.utils import _l2_rec, _ent, _discrepancy, _ring
+from utils.utils import _l2_rec, _ent, _discrepancy, _ring, RingLoss
 
 from torch.utils.tensorboard import SummaryWriter
 from time import gmtime, strftime
@@ -24,7 +24,12 @@ class Solver(nn.Module):
 
         super().__init__()
 
-        timestring = strftime("%Y-%m-%d_%H-%M-%S", gmtime()) + "_%s" % args.exp_name
+        self.opt_losses = args.opt_losses
+        self.check_list = ['disc_ds_di_C_D', 'disc_ds_di_G', 'ring', 'confusion_G']
+        assert all([ol in self.check_list
+                    for ol in self.opt_losses]), 'Check loss entries'
+        opt_losses_str = ",".join(map(str, self.opt_losses))
+        timestring = strftime("%Y-%m-%d_%H-%M-%S", gmtime()) + "_{}_optloss={}_src={}".format(args.exp_name, opt_losses_str, args.source)
         self.logdir = os.path.join('./logs', timestring)
         self.logger = SummaryWriter(log_dir=self.logdir)
         self.device = torch.device("cuda" if args.use_cuda else "cpu")
@@ -85,9 +90,10 @@ class Solver(nn.Module):
             'G': self.G, 'FD': self.FD, 'R': self.R, 'MI': self.MI
         })
 
-        self.xent_loss = nn.CrossEntropyLoss().cuda()
-        self.adv_loss = nn.BCEWithLogitsLoss().cuda()
-        self.set_optimizer(which_opt=self.which_opt, lr=self.lr)
+        self.xent_loss = nn.CrossEntropyLoss().to(self.device)
+        self.adv_loss = nn.BCEWithLogitsLoss().to(self.device)
+        self.ring_loss = RingLoss(type='auto', loss_weight=1.0).to(self.device)
+        self.set_optimizer(lr=self.lr)
         self.to_device()
 
     def get_dataset_size(self, subset):
@@ -111,7 +117,7 @@ class Solver(nn.Module):
         for k, v in self.D.items():
             self.D[k] = v.cuda()
 
-    def set_optimizer(self, which_opt='adam', lr=0.001, momentum=0.9):
+    def set_optimizer(self, lr=0.001):
         self.opt = {
             'C_ds': optim.Adam(self.C['ds'].parameters(), lr=lr, weight_decay=5e-4),
             'C_di': optim.Adam(self.C['di'].parameters(), lr=lr, weight_decay=5e-4),
@@ -138,12 +144,13 @@ class Solver(nn.Module):
             self.opt[k].step()
         self.reset_grad()
 
-    def log_scalar(self, _loss, prefix=''):
-        if self.global_step % self.interval == 0:
+    def log_scalar(self, _loss, prefix='', forced=False):
+        if self.global_step % self.interval == 0 or forced:
             for k, val in _loss.items():
-                self.logger.add_scalar(
-                    "%s/%s" % (prefix, k), val,
-                    global_step=self.global_step)
+                if val is not None:
+                    self.logger.add_scalar(
+                        "%s/%s" % (prefix, k), val,
+                        global_step=self.global_step)
 
     def optimize_classifier(self, img_src, label_src):
         _loss = dict()
@@ -188,11 +195,11 @@ class Solver(nn.Module):
     def ring_loss_minimizer(self, img_src, img_trg):
         data = torch.cat((img_src, img_trg), 0)
         feat = self.G(data)
-        ring_loss = _ring(feat)
+        # ring_loss = _ring(feat)
+        ring_loss = self.ring_loss(feat)
         ring_loss.backward()
         self.group_opt_step(['G'])
         self.log_scalar({'ring': ring_loss}, 'extra_loss')
-
         return ring_loss
 
     def mutual_information_minimizer(self, img_src, img_trg):
@@ -240,7 +247,10 @@ class Solver(nn.Module):
 
         _sum_loss = sum([l for _, l in _loss.items()])
         _sum_loss.backward()
-        self.group_opt_step(['D_ci', 'G'])
+        if 'confusion_G' in self.opt_losses:
+            self.group_opt_step(['D_ci', 'G'])
+        else:
+            self.group_opt_step(['D_ci'])
         return _loss
 
     def adversarial_alignment(self, img_src, img_trg):
@@ -249,7 +259,7 @@ class Solver(nn.Module):
         # are from target or source domain. To win this game and fool FD,
         # DI should extract domain invariant features.
 
-        # Loss measures features' ability to fool the discriminator
+        # Measure discriminator's ability to classify source from target samples
         src_domain_pred = self.FD(self.D['di'](self.G(img_src)))
         tgt_domain_pred = self.FD(self.D['di'](self.G(img_trg)))
         df_loss_src = self.adv_loss(src_domain_pred, self.src_domain_code)
@@ -258,7 +268,7 @@ class Solver(nn.Module):
         alignment_loss1.backward()
         self.group_opt_step(['FD', 'D_di', 'G'])
 
-        # Measure discriminator's ability to classify source from target samples
+        # Loss measures features' ability to fool the discriminator
         src_domain_pred = self.FD(self.D['di'](self.G(img_src)))
         tgt_domain_pred = self.FD(self.D['di'](self.G(img_trg)))
         df_loss_src = self.adv_loss(src_domain_pred, 1 - self.src_domain_code)
@@ -267,13 +277,15 @@ class Solver(nn.Module):
         alignment_loss2.backward()
         self.group_opt_step(['FD', 'D_di', 'G'])
 
-        for _ in range(self.num_k):
-            feat_trg = self.G(img_trg)
-            loss_dis = _discrepancy(
-                self.C['ds'](self.D['ds'](feat_trg)),
-                self.C['di'](self.D['di'](feat_trg)))
-            loss_dis.backward()
-            self.group_opt_step(['G'])
+        loss_dis = None
+        if 'disc_ds_di_G' in self.opt_losses:
+            for _ in range(self.num_k):
+                feat_trg = self.G(img_trg)
+                loss_dis = _discrepancy(
+                    self.C['ds'](self.D['ds'](feat_trg)),
+                    self.C['di'](self.D['di'](feat_trg)))
+                loss_dis.backward()
+                self.group_opt_step(['G'])
 
         self.log_scalar(
             {'alignment_loss1': alignment_loss1,
@@ -336,8 +348,10 @@ class Solver(nn.Module):
                 self.reset_grad()
                 # ================================== #
                 self.optimize_classifier(img_src, label_src)
-                self.discrepancy_minimizer(img_src, img_trg, label_src)
-                self.ring_loss_minimizer(img_src, img_trg)
+                if 'disc_ds_di_C_D' in self.opt_losses:
+                    self.discrepancy_minimizer(img_src, img_trg, label_src)
+                if 'ring' in self.opt_losses:
+                    self.ring_loss_minimizer(img_src, img_trg)
                 self.mutual_information_minimizer(img_src, img_trg)
                 self.class_confusion(img_src, img_trg)
                 self.adversarial_alignment(img_src, img_trg)
@@ -401,8 +415,8 @@ class Solver(nn.Module):
             loss[key] = loss_src[key] / size_src
             print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(
                 key=key, acc=acc[key], loss=loss[key]))
-        self.log_scalar(acc, prefix='{}_src_acc'.format(subset))
-        self.log_scalar(loss, prefix='{}_src_loss'.format(subset))
+        self.log_scalar(acc, prefix='{}_src_acc'.format(subset), forced=True)
+        self.log_scalar(loss, prefix='{}_src_loss'.format(subset), forced=True)
 
         print("Target - {}".format(subset))
         acc, loss = dict(), dict()
@@ -411,5 +425,5 @@ class Solver(nn.Module):
             loss[key] = loss_trg[key] / size_src
             print("\t{key}: acc = {acc:.2f}, loss = {loss:.4f}".format(
                 key=key, acc=acc[key], loss=loss[key]))
-        self.log_scalar(acc, prefix='{}_trg_acc'.format(subset))
-        self.log_scalar(loss, prefix='{}_trg_loss'.format(subset))
+        self.log_scalar(acc, prefix='{}_trg_acc'.format(subset), forced=True)
+        self.log_scalar(loss, prefix='{}_trg_loss'.format(subset), forced=True)
